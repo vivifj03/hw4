@@ -1,0 +1,349 @@
+---
+title: "Homework 4: ExpressionSet, Annotation, GEO"
+author: "Viviana Alejandra Rodriguez Romero"
+date: "October 18, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options("scipen"=100, "digits"=4)
+```
+
+<br />   
+
+## Question 1 - Create ExpressionSet
+
+* Clone https://github.com/mdozmorov/63_immune_cells repository on your computer 
+
+<br />   
+
+* Create expression matrix 
+    + Read in data/counts.txt.gz 
+
+<br />   
+
+```{r}
+    counts<-read.table(gzfile("63_immune_cells-master/data/counts.txt.gz"),  header=T)
+```
+    
+<br />   
+
+  + Note the ﬁrst 6 columns are gene annotation columns. Extract them into a separate variable - this is a part of your feature annotation data 
+
+<br />   
+
+```{r}
+    annotation.1<-counts[,1:6]
+```
+
+<br />   
+
+  + Extract the other columns into a separate variable - this is your expression matrix 
+
+<br />   
+
+```{r}
+    expression<-counts[,-(1:6)]
+```
+
+<br />   
+
+  + Add row names (probe IDs) to the expression matrix, extracted from column “Geneid”. **What type of probe ID is it?** 
+
+<br />   
+
+```{r}
+    rownames(expression)<-counts$Geneid
+    expression2<-expression[ , order(names(expression))]
+```
+
+<br />   
+
+The probe ID is a Ensembl gene id.
+
+<br />   
+
+* Create feature annotation matrix 
+    + Using the ﬁrst 6 columns extracted above, add gene symbol and description to the corresponding probe IDs. Use biomaRt, merge the returned data. Make sure the number and the order of probe IDs match! **How many probe IDs did not have mapping? How many probe IDs have description but no gene symbol?** 
+
+<br />   
+
+```{r}
+    #Adding symbol and description (gene name)
+    library(biomaRt)
+    mart <- useMart("ensembl", dataset="hsapiens_gene_ensembl")
+    genes<-getBM(attributes=c('ensembl_gene_id','hgnc_symbol','description'),
+                 filters='ensembl_gene_id',
+                 values=rownames(expression), mart=mart, uniqueRows=T)
+    colnames(genes)<-c("Geneid", "Symbol", "Description")
+    annotation.2<-merge(annotation.1, genes, by="Geneid", all.x=T) 
+    
+    
+    #Since there are some Geneids with more than one symbol, to keep this information 
+    # it is necessary to replicate the data
+    list<-c("ENSG00000202250", "ENSG00000206785", "ENSG00000207062", "ENSG00000207511",
+            "ENSG00000207688", "ENSG00000207704", "ENSG00000230417", "ENSG00000263436",
+            "ENSG00000266328", "ENSG00000266354")
+    an.1<-annotation.2[!(annotation.2$Geneid %in% list), ]
+    an.2<-annotation.2[annotation.2$Geneid %in% list, ]
+    an.2<-an.2[order(an.2$Geneid),]
+    
+    
+    #We need unique Genes id
+    an.2$Geneid<-c("ENSG00000202250", "ENSG00000202250.b", "ENSG00000206785", "ENSG00000206785.b",
+                   "ENSG00000207062", "ENSG00000207062.b", "ENSG00000207511", 'ENSG00000207511.b',
+                   "ENSG00000207688", "ENSG00000207688.b", "ENSG00000207704", 'ENSG00000207704.b',
+                   "ENSG00000230417", "ENSG00000230417.b", "ENSG00000263436", "ENSG00000263436.b",
+                   'ENSG00000266328', "ENSG00000266328.b", "ENSG00000266354", "ENSG00000266354.b")
+    annotation.3<- rbind(an.1, an.2)
+    rownames(annotation.3)<-annotation.3$Geneid
+    annotation.3<- annotation.3[order(rownames(annotation.3)),]
+    annotation.3$Symbol<-ifelse(annotation.3$Symbol=="", NA, annotation.3$Symbol)
+    annotation.3$Description<-ifelse(annotation.3$Description=="", NA, annotation.3$Description)
+    hw.annotation <- new("AnnotatedDataFrame", data = annotation.3)
+
+    
+    # Make sure the number and the order of prob IDs match!
+    #### We have to replicate the genes in expression matrix first
+    
+    ex.1<-expression2[!(rownames(expression2) %in% list), ]
+    ex.2<-expression2[rownames(expression2) %in% list, ]
+    ex.3<-ex.2[order(rownames(ex.2)),]
+    rownames(ex.3)<-c("ENSG00000202250.b", "ENSG00000206785.b", "ENSG00000207062.b",
+                      'ENSG00000207511.b', "ENSG00000207688.b", 'ENSG00000207704.b',
+                      "ENSG00000230417.b", "ENSG00000263436.b", "ENSG00000266328.b", 
+                      "ENSG00000266354.b")
+    expression3<-rbind(ex.1, rbind(ex.2, ex.3))
+    expression3<-expression3[order(rownames(expression3)),]
+    
+    all.equal(rownames(annotation.3), rownames(expression3))
+    
+    
+    # number of probe IDs did not have mapping (neither symbol nor description)?
+    nrow(annotation.3[is.na(annotation.3$Symbol) & is.na(annotation.3$Description),])
+    
+    
+    # number of probe IDs have description but no gene symbol
+    nrow(annotation.3[is.na(annotation.3$Symbol) & !(is.na(annotation.3$Description)),])
+```
+
+<br />   
+
+  When mapping this data, 10 genes were associated with more than two symbols. Then, it was necessary to repeat these lines of data in such a way that both associations were kept. After making those adjustments in both annotation and expression datasets, the number and order of probe Ids matched.      
+  There were 24093 probe Ids without mapping (neither symbol nor description), and 1503 that have description but no gene symbol. 
+    
+<br />   
+
+* Create sample annotation matrix 
+    + Read in data/E-MTAB-2319.sdrf.txt - this it your sample annotation data. **How many different cell types are there? How many replicates per cell type?** 
+
+<br />   
+
+```{r}
+    chara<-read.table("63_immune_cells-master/data/E-MTAB-2319.sdrf.txt", sep="\t",  header=T)
+    
+    ####Each sample has two replicates; then we kept only the first one.
+    
+    chara2<-chara[grep("_R1.fastq.gz", chara$Comment.SUBMITTED_FILE_NAME.),]
+    rownames(chara2)<-paste(chara2$Comment.ENA_RUN.,".bam", sep="")
+    chara2<-chara2[order(row.names(chara2)),]
+    phenoData <- new("AnnotatedDataFrame", data = chara2)
+    phenoData
+    
+    #How many different cell types are there? 
+    length(unique(chara2$Characteristics.cell.type.))
+    
+    #How many replicates per cell type?
+    library(DT)
+    q<-as.matrix(table(chara2$Characteristics.cell.type.))
+    colnames(q)<-c("Frequency")
+    datatable(q)
+```
+
+<br />   
+
+  There are 13 different cell types; the above table has the number of replicates per cell type.
+
+<br />   
+
+* Create a minimal ExpressionSet using expression (assayData) and sample annotation (phenoData) matrices. **Print the resulting ExpressionSet**
+
+<br />   
+
+```{r message = FALSE}
+    all.equal(rownames(chara2), names(expression3))
+    library("Biobase")
+    expres.set<-ExpressionSet(assayData = as.matrix(expression3), 
+                              phenoData=phenoData, 
+                              featureData= hw.annotation)
+    expres.set
+```
+
+<br />   
+
+## Question 2 - Exploratory data analysis
+
+
+* log2-transform the expression matrix + 1. **Why add 1 when log-transforming? **
+
+<br />   
+
+```{r}
+    expres.set.l<-expres.set
+    exprs(expres.set.l)<-log2(exprs(expres.set)+1)
+```
+
+<br />   
+
+  The expression values include values between 0 and 1, where the log2-transformation is lower than 0, particularly $log2(0)=-Inf$, which is not useful information to work with on the analysis. Then, adding 1 to each cell in the expression matrix, $log2(1)=0$ keeping the expression value in 0, and for the other cells the increment is minimum. 
+
+<br />   
+
+* Do boxplot on the expression matrix. **Write observations about the data **
+
+<br />   
+
+```{r}
+    par(cex.axis=0.5) 
+    boxplot(exprs(expres.set.l), names=seq(1,ncol(expression3)), 
+            main="Log2(Gene expression) by sample", 
+            xlab="Sample", ylab="Log2(Gene expression)")
+```
+
+<br />   
+
+
+The above graph shows the distribution of the log2-expression value for the study genes by samples. High values imply a higher expression of the gene. We can see a high variability in the gene expression within samples. Also, for most samples, the median of the gene expression is zero. Additionally, there is a similar behavior between samples, where we can see all samples have some high expressed genes (black points out of boxes).         
+      
+<br />   
+
+ **How many rows with all zeros are there?** Exclude them from the expression matrix. 
+
+<br />   
+```{r}
+    #How many rows with all zeros are there? 
+    nrow(exprs(expres.set.l)[rowSums(exprs(expres.set.l))==0, ])
+    
+    
+    # Exclude them from the expression matrix
+    expres.set.l.n0<-expres.set.l[rowSums(exprs(expres.set.l))>0, ]
+```
+
+<br />   
+
+  There are 12089 genes that have an expression equals zero across samples.
+
+<br />   
+
+* Get the list of housekeeping genes from http://www.tau.ac.il/~elieis/HKG/ 
+
+<br />   
+
+```{r}
+    hkg<-read.table("HK_genes.txt", sep=" ",  header=F)
+```   
+
+<br />   
+
+  + Separate the expression matrix into two matrices, one containing expression of housekeeping genes and another containing all other genes. **What is the mean/median standard deviation across samples of housekeeping genes? Of other genes? If you are to compare two distributions of standard deviations - which test would you use? Applied to the current data, are the standard deviations of housekeeping genes diﬀerent from the rest of the genes? **
+    
+```{r}
+    #Separate the expression matrix into two matrices, one containing expression of housekeeping genes and another containing all other genes. 
+    
+    expression.hkg<-expres.set.l.n0[ fData(expres.set.l.n0)$Symbol %in% hkg[,1], ]
+    expression.nhkg<-expres.set.l.n0[ !(fData(expres.set.l.n0)$Symbol %in% hkg[,1]), ]
+    
+  #What is the mean/median standard deviation across samples of housekeeping genes? Of other genes? 
+```
+  
+###Housekeeping genes
+```{r}
+    sum.exp.hkp<-matrix(nrow=3613, ncol = 3)
+    sum.exp.hkp[,1] <- esApply(expression.hkg, 1, mean)
+    sum.exp.hkp[,2] <- esApply(expression.hkg, 1, median)
+    sum.exp.hkp[,3] <- esApply(expression.hkg, 1, sd)
+    colnames(sum.exp.hkp)<-c("mean", "median", "s.d.")
+    rownames(sum.exp.hkp)<-rownames(exprs( expression.hkg))
+    datatable(round(sum.exp.hkp,4))
+```
+
+<br />  
+
+###Non housekeeping genes
+```{r warning=FALSE}
+    sum.exp.nhkp<-matrix(nrow=46377, ncol = 3)
+    sum.exp.nhkp[,1] <- esApply(expression.nhkg, 1, mean)
+    sum.exp.nhkp[,2] <- esApply(expression.nhkg, 1, median)
+    sum.exp.nhkp[,3] <- esApply(expression.nhkg, 1, sd)
+    colnames(sum.exp.nhkp)<-c("mean", "median", "s.d.")
+    rownames(sum.exp.nhkp)<-rownames(exprs( expression.nhkg))
+    datatable(round(sum.exp.nhkp,4))
+    ```
+    
+<br />   
+
+**If you are to compare two distributions of standard deviations - which test would you use? **
+    
+The two-sample Kolmogorov–Smirnov test can be use to compare the distributions of standard deviations between housekeeping ana non-housekeeping genes. 
+
+<br />           
+
+```{r warning=FALSE, message=FALSE}
+     ##Applied to the current data, are the standard deviations of housekeeping genes diﬀerent from the rest of the genes?
+    ks.test(sum.exp.hkp[,3], sum.exp.nhkp[,3])
+ 
+    library(sm)
+    sm.density.compare(c(sum.exp.hkp[,3],sum.exp.nhkp[,3]), 
+                       group = rep(1:2, c(length(sum.exp.hkp[,3]), 
+                                          length(sum.exp.nhkp[,3]))), 
+                       xlab="Standard deviations", xlim=c(0,5), main="Standard deviation distributions")
+    legend("topright", legend=c("Housekeeping", "Non-housekeeping"), fill=2+(0:2))
+```
+
+<br />  
+
+  The above graph shows the distributions of the standard deviation of the gene expression across samples according to whether the genes are housekeeping or not. As we can see, the distributions appear different since the variability in the distribution for the non-housekeeping group is greater. When performing the two-sample Kolmogorov–Smirnov test to compare distributions, we found evidence that the distributions are different (p-value <0.0001)    
+    
+<br />
+
+* Summarize median gene expression per cell type. Keep rows annotates with gene symbols. Display the summary expression matrix (gene symbols as rows, cell types as columns, each cell is median expression) as DT::datatable. Optional: Highlight top 100 highest expressed genes for each cell type in the table.
+
+<br />  
+
+```{r message=FALSE, warning=FALSE}
+     ## Summarize median gene expression per cell type
+    f <- function(x, s) {
+    xx <- split(x, s)
+       m<-vector(length = 13)
+       for(i in 1:13){
+         m[i]<-median(xx[[i]])
+       }
+    return(m)
+    }
+    
+    #Using data with log2-transformation, no rows with all zero and that have symbol.
+    expression.with.S<-expres.set.l.n0[ !(is.na(fData(expres.set.l.n0)$Symbol)), ]
+   
+    type<-expression.with.S[["Characteristics.cell.type."]]
+    res <- t(esApply(expression.with.S, 1, f, s = type))
+    colnames(res)<-c("B CD5", "B Memory", "B Naive", "CD4 Central Memory", "CD4 Effector Memory",
+                     "CD4 Naive", "CD4 Th1", "CD4 Th17", "CD4 Th2", "CD4 Treg", "CD8 Central Memory",
+                     "CD8 Effector Memory", "CD8 Naive")
+   
+    #Finding the top 100 cutoff
+    top<-vector(length = 13)
+    for(i in 1:13){
+      top[i]<- res[order(res[,i], decreasing = TRUE)[100],i]
+    }
+    
+    library(DT)
+    data <- datatable(round(res,3), rownames = fData(expression.with.S)$Symbol,
+              options = list(order = list(list(1, 'desc')))) 
+    v<-mapply(function(column,t){ 
+        data <<- data %>% formatStyle(column, background = styleInterval(top[column], 
+                             c('white', 'yellow')))},seq(1:13),t=top)
+    data
+```   
+    
+    
